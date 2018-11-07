@@ -9,7 +9,6 @@ from BiRanker import BiRanker
 from SimilarityJaccard import SimilarityJaccard
 
 
-
 class CoreMMR(BiRanker):
     def __init__(self, route='mmr.core', alpha=0.5, selected=10):
         super(CoreMMR, self).__init__(route=route, alpha=alpha, selected=selected)

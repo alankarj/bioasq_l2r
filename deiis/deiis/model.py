@@ -40,7 +40,7 @@ class JsonObject(object):
             self.set_defaults()
             return
 
-        for key,value in params.iteritems():
+        for key, value in params.iteritems():
             if not key in self.__class__.properties:
                 raise AttributeError('Class %s does not have a property %s', self.__class__.__name__, key)
             setattr(self, key, value)
@@ -142,12 +142,12 @@ class DataSet(JsonObject):
 
     """
     properties = {
-        'questions':list
+        'questions': list
     }
     def __init__(self, params=None):
         super(DataSet, self).__init__(params)
         if self.questions:
-            self.questions = [Question(q) for q in self.questions ]
+            self.questions = [Question(q) for q in self.questions]
 
 
 class Serializer:
