@@ -1,7 +1,7 @@
 from nltk.tokenize import sent_tokenize, word_tokenize
 from nltk.corpus import stopwords
-from pythonrouge.pythonrouge import Pythonrouge
-
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+import copy
 
 class SimilarityJaccard(object):
     def __init__(self, stopWords):
@@ -46,6 +46,7 @@ def get_all_sentences(summary_type_questions):
 
 
 def get_labels(summary_type_questions, label_type):
+    print "Getting labels..."
     all_scores = list()
     if label_type == "JACCARD":
         stopWords = set(stopwords.words('english'))
@@ -69,23 +70,37 @@ def get_labels(summary_type_questions, label_type):
 
                 all_scores.append(sum(scores)/len(scores))
 
-    else:
-        for i, question in enumerate(summary_type_questions):
-            print "Question-", i
-
-            list_of_sets = []
-
-            if type(question.ideal_answer) == list:
-                for ideal_answer in question.ideal_answer:
-                    list_of_sets.append(set([i.lower() for i in word_tokenize(ideal_answer) if i.lower() not in stopWords]))
-            else:
-                list_of_sets.append(set([i.lower() for i in word_tokenize(question.ideal_answer) if i.lower() not in stopWords]))
-
-            for sentence in question.sentences:
-                scores = []
-                for s2 in list_of_sets:
-                    scores.append(similarity.calculateSimilarity(sentence, s2))
-
-                all_scores.append(sum(scores)/len(scores))
-
         print "Number of scores: ", len(all_scores)
+
+
+def get_features(summary_type_questions, feature_type="COUNT", sentence_only=False):
+    print "Getting features..."
+    sentence_list = list()
+    question_list = list()
+    all_featurizers = list()
+    all_features = list()
+    for i, question in enumerate(summary_type_questions):
+        print "Question-", i
+        for sentence in question.sentences:
+            question_list.append(question.body)
+            sentence_list.append(sentence)
+
+    if feature_type == "COUNT":
+        sent_featurizer = CountVectorizer(max_features=10000)
+    else:
+        sent_featurizer = TfidfVectorizer(max_features=10000)
+
+    all_featurizers.append(sent_featurizer)
+
+    if not sentence_only:
+        question_featurizer = copy.deepcopy(sent_featurizer)
+        all_featurizers.append(question_featurizer)
+
+    sent_features = all_featurizers[0].fit_transform(sentence_list)
+    all_features.append(sent_features)
+
+    if not sentence_only:
+        question_features = all_featurizers[1].fit_transform(question_list)
+        all_features.append(question_features)
+
+    return all_featurizers, all_features

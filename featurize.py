@@ -3,6 +3,7 @@ from deiis.model import Serializer, DataSet
 from Featurizer import vectorize
 
 LABEL_TYPE = "JACCARD"  # Use "ROUGE" for ROUGE-2
+FEATURE_TYPE = "TF-IDF"  # Use "TF-IDF" for TF-IDF
 
 if __name__ == '__main__':
     if len(sys.argv) != 2:
@@ -26,6 +27,5 @@ if __name__ == '__main__':
     print 'Total summary-type questions: ', len(summary_type_questions)
 
     summary_type_questions = vectorize.get_all_sentences(summary_type_questions)
-    vectorize.get_labels(summary_type_questions, LABEL_TYPE)
-
-
+    all_featurizers, all_features = vectorize.get_features(summary_type_questions, feature_type=FEATURE_TYPE)
+    labels = vectorize.get_labels(summary_type_questions, label_type=LABEL_TYPE)
