@@ -1,5 +1,8 @@
 import sys
 from deiis.model import Serializer, DataSet
+from Featurizer import vectorize
+
+LABEL_TYPE = "JACCARD"  # Use "ROUGE" for ROUGE-2
 
 if __name__ == '__main__':
     if len(sys.argv) != 2:
@@ -13,16 +16,16 @@ if __name__ == '__main__':
     with open(filename, 'r') as fp:
         dataset = Serializer.parse(fp, DataSet)
 
-    print dataset
-
-    num_summary_ques = 0
+    summary_type_questions = []
     for question in dataset.questions:
         if question.type == 'summary':
-            num_summary_ques += 1
+            summary_type_questions.append(question)
             print question.id + ': ' + question.body + ': ' + question.type
 
-            for snippet in question.snippets:
-                print snippet.text
-
     print 'Total questions: ', len(dataset.questions)
-    print 'Total summary-type questions: ', num_summary_ques
+    print 'Total summary-type questions: ', len(summary_type_questions)
+
+    summary_type_questions = vectorize.get_all_sentences(summary_type_questions)
+    vectorize.get_labels(summary_type_questions, LABEL_TYPE)
+
+
