@@ -3,13 +3,17 @@ from nltk.corpus import stopwords
 from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 import copy
 
+
 class SimilarityJaccard(object):
     def __init__(self, stopWords):
         self.stopWords = stopWords
 
     def calculateSimilarity(self, s1, s2):
         # s2 is assumed to be a set of tokens
-        set1 = set([i.lower() for i in word_tokenize(s1) if i.lower() not in self.stopWords])
+        set1 = set([
+            i.lower() for i in word_tokenize(s1)
+            if i.lower() not in self.stopWords
+        ])
         set2 = s2
         return float(len(set1.intersection(set2))) / len(set1.union(set2))
 
@@ -59,21 +63,34 @@ def get_labels(summary_type_questions, label_type):
 
             if type(question.ideal_answer) == list:
                 for ideal_answer in question.ideal_answer:
-                    list_of_sets.append(set([i.lower() for i in word_tokenize(ideal_answer) if i.lower() not in stopWords]))
+                    list_of_sets.append(
+                        set([
+                            i.lower() for i in word_tokenize(ideal_answer)
+                            if i.lower() not in stopWords
+                        ]))
             else:
-                list_of_sets.append(set([i.lower() for i in word_tokenize(question.ideal_answer) if i.lower() not in stopWords]))
+                list_of_sets.append(
+                    set([
+                        i.lower() for i in word_tokenize(question.ideal_answer)
+                        if i.lower() not in stopWords
+                    ]))
 
             for sentence in question.sentences:
                 scores = []
                 for s2 in list_of_sets:
                     scores.append(similarity.calculateSimilarity(sentence, s2))
 
-                all_scores.append(sum(scores)/len(scores))
+                all_scores.append(sum(scores) / len(scores))
 
         print "Number of scores: ", len(all_scores)
+        return all_scores
+    else:
+        raise ValueError("Unknown label_type: {}".format(label_type))
 
 
-def get_features(summary_type_questions, feature_type="COUNT", sentence_only=False):
+def get_features(summary_type_questions,
+                 feature_type="COUNT",
+                 sentence_only=False):
     print "Getting features..."
     sentence_list = list()
     question_list = list()
@@ -87,8 +104,10 @@ def get_features(summary_type_questions, feature_type="COUNT", sentence_only=Fal
 
     if feature_type == "COUNT":
         sent_featurizer = CountVectorizer(max_features=10000)
-    else:
+    elif feature_type == "TF-IDF":
         sent_featurizer = TfidfVectorizer(max_features=10000)
+    else:
+        raise ValueError("Unknown feature_type: {}".format(feature_type))
 
     all_featurizers.append(sent_featurizer)
 
