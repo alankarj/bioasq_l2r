@@ -6,7 +6,11 @@ Usage:
 
 Options:
     --data-dir=<file>       Directory to data [default: ./data/summary]
+    --sentence-only         Sentence only features
+    --question-only         Question only features 
+    --pca                   Use PCA to normalize features
     --feature=<str>         Feature type to use [default: TF-IDF]
+    --classweight           Balance data using class weights
     --label=<str>           Label type to use [default: JACCARD]
     --interval=<float>      Interval for binary classification [default: 0.1]
     --model=<str>           Model type to use [default: LinearSVC]
@@ -29,6 +33,7 @@ from scipy.sparse import hstack
 from deiis.model import DataSet, Serializer
 from Featurizer import vectorize
 
+from sklearn.decomposition import PCA
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score
 from sklearn.neural_network import MLPClassifier
@@ -79,16 +84,26 @@ class ModelWrapper(object):
     def score(self, question, sentence):
 
         # Featurizer
-        question_featurizer, sentence_featurizer = self.featurizers
+        if len(self.featurizers) == 3:
+            sentence_featurizer, question_featurizer, pca = self.featurizers
+        else:
+            sentence_featurizer, question_featurizer = self.featurizers
 
-        question_feature = question_featurizer.transform([question])
         sentence_feature = sentence_featurizer.transform([sentence])
+        question_feature = question_featurizer.transform([question])
 
-        feature = hstack([question_feature, sentence_feature])
+        feature = hstack([sentence_feature, question_feature]).toarray()
+
+        if len(self.featurizers) == 3:
+            feature = pca.transform(feature)
 
         pred = self.clf.predict(feature)
         cat = pred.tolist()[0]
-        score = self.cat2score[cat] + 0.05  # 0-1 => 0.05, 1-2 => 0.15
+
+        interval = self.cat2score[1] - self.cat2score[0]
+
+        score = self.cat2score[cat] + \
+            float(interval)/2  # 0-1 => 0.05, 1-2 => 0.15
         return score
 
 
@@ -106,7 +121,7 @@ def read_summary_questions(filepath, get_all_sentences=True):
     return summary_questions
 
 
-def load_and_featurize(data_path, feature_type, label_type):
+def load_and_featurize(data_path, feature_type, label_type, sentence_only=False, question_only=False):
 
     summary_type_questions = read_summary_questions(data_path)
     print 'Total summary-type questions: ', len(summary_type_questions)
@@ -117,9 +132,47 @@ def load_and_featurize(data_path, feature_type, label_type):
     labels = vectorize.get_labels(
         summary_type_questions, label_type=label_type)
 
-    X = hstack(all_features).toarray()
+    assert not (question_only and sentence_only)
+    if sentence_only:
+        X = all_features[0].toarray()
+    elif question_only:
+        X = all_features[1].toarray()
+    else:
+        X = hstack(all_features).toarray()
     Y = np.array(labels)
     return X, Y, all_featurizers
+
+
+def featurize(summary_questions, all_featurizers, label_type, sentence_only=False, question_only=False):
+    """
+    Featurize with given featurizer
+    """
+    question_list = []
+    sentence_list = []
+    for question in summary_questions:
+        for sentence in question.sentences:
+            question_list.append(question.body)
+            sentence_list.append(sentence)
+
+    sentence_features = all_featurizers[0].transform(sentence_list)
+    question_features = all_featurizers[1].transform(question_list)
+
+    labels = vectorize.get_labels(summary_questions, label_type=label_type)
+
+    if sentence_only:
+        X = sentence_features.toarray()
+    elif question_only:
+        X = question_features.toarray()
+    else:
+        X = hstack([sentence_features, question_features]).toarray()
+
+    if len(all_featurizers) == 3:
+        print("Use PCA")
+        pca = all_featurizers[2]
+        X = pca.transform(X)
+
+    Y = np.array(labels)
+    return X, Y
 
 
 def train(opt):
@@ -129,14 +182,28 @@ def train(opt):
     feature_type = opt["--feature"]
     label_type = opt["--label"]
 
+    question_only = bool(opt["--question-only"])
+    sentence_only = bool(opt["--sentence-only"])
+    use_pca = bool(opt["--pca"])
+
     X_train, Y_train, all_featurizers = load_and_featurize(
-        train_path, feature_type, label_type)
+        train_path, feature_type, label_type, sentence_only, question_only)
+
+    if use_pca:
+        print("Use PCA")
+        pca = PCA(n_components=300)
+        X_train = pca.fit_transform(X_train)
+        all_featurizers.append(pca)
 
     print("X_train", X_train.shape)
     print("Y_train", Y_train.shape)
 
     interval = float(opt["--interval"])
     Y_train_bin, cat2score = score_to_bin(Y_train, interval)
+
+    print("Counting labels...")
+    unique, counts = np.unique(Y_train_bin, return_counts=True)
+    print(dict(zip(unique, counts)))
 
     model_type = opt["--model"]
     if model_type == "LogisticRegression":
@@ -164,76 +231,86 @@ def train(opt):
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
-    model_name = "{}_{}_{}_{}.pickle".format(
+    if sentence_only:
+        feature_type += "_s_only"
+    elif question_only:
+        feature_type += "_q_only"
+
+    model_name = "{}_{}_{}_{}".format(
         model_type, feature_type, label_type, interval)
-    save_path = os.path.join(save_dir, model_name)
+    if use_pca:
+        model_name += "_pca"
+    save_path = os.path.join(save_dir, model_name + ".pickle")
 
     with open(save_path, "wb") as fout:
         pickle.dump(model, fout)
 
 
-def featurize(summary_questions, all_featurizers, label_type):
-    """
-    Featurize with given featurizer
-    """
-    question_list = []
-    sentence_list = []
-    for question in summary_questions:
-        for sentence in question.sentences:
-            question_list.append(question.body)
-            sentence_list.append(sentence)
-
-    question_features = all_featurizers[0].transform(question_list)
-    sentence_features = all_featurizers[1].transform(sentence_list)
-
-    labels = vectorize.get_labels(summary_questions, label_type=label_type)
-
-    X = hstack([question_features, sentence_features]).toarray()
-    Y = np.array(labels)
-    return X, Y
-
-
 def test(opt):
     """ Example Usage of Testing
     """
-
     data_dir = opt["--data-dir"]
     valid_path = os.path.join(data_dir, "summary.valid.json")
-    test_path = os.path.join(data_dir, "summary.test.json")
+    #test_path = os.path.join(data_dir, "summary.test.json")
 
     valid_questions = read_summary_questions(valid_path)
-    test_questions = read_summary_questions(test_path)
+    #test_questions = read_summary_questions(test_path)
 
     model_path = opt["--model-path"]
     with open(model_path, 'rb') as fin:
         model = pickle.load(fin)
 
     label_type = opt["--label"]
-    X_valid, Y_valid = featurize(
-        valid_questions, model.featurizers, label_type)
-    print("X_valid", X_valid.shape, "Y_valid", Y_valid.shape)
-    X_test, Y_test = featurize(
-        test_questions, model.featurizers, label_type)
-    print("X_test", X_test.shape, "Y_test", Y_test.shape)
 
+    question_only = bool(opt["--question-only"])
+    sentence_only = bool(opt["--sentence-only"])
+
+    X_valid, Y_valid = featurize(
+        valid_questions, model.featurizers, label_type, sentence_only, question_only)
+
+    print("X_valid", X_valid.shape, "Y_valid", Y_valid.shape)
+    """
+    X_test, Y_test = featurize(
+        test_questions, model.featurizers, label_type, sentence_only, question_only)
+    print("X_test", X_test.shape, "Y_test", Y_test.shape)
+    """
     cat2score = model.cat2score
     interval = cat2score[1] - cat2score[0]
 
     Y_valid_bin, _ = score_to_bin(Y_valid, interval)
-    Y_test_bin, _ = score_to_bin(Y_test, interval)
+    #Y_test_bin, _ = score_to_bin(Y_test, interval)
+
+    print("Counting labels...")
+    unique, counts = np.unique(Y_valid_bin, return_counts=True)
+    print(dict(zip(unique, counts)))
 
     clf = model.clf
-    valid_acc = evaluate(clf, X_valid, Y_valid_bin)
+    #valid_acc = evaluate(clf, X_valid, Y_valid_bin)
+
+    Y_valid_pred = clf.predict(X_valid)
+    valid_acc = accuracy_score(Y_valid_bin, Y_valid_pred)
+
+    print("Counting validation prediction...")
+    unique, counts = np.unique(Y_valid_pred, return_counts=True)
+    print(dict(zip(unique, counts)))
+
     print('valid_acc', valid_acc)
 
-    test_acc = evaluate(clf, X_test, Y_test_bin)
-    print('test_acc', test_acc)
+    #test_acc = evaluate(clf, X_test, Y_test_bin)
+    #print('test_acc', test_acc)
 
 
 def example(opt):
     model_path = opt["--model-path"]
     with open(model_path, 'rb') as fin:
         model = pickle.load(fin)
+
+    data_dir = opt["--data-dir"]
+    train_path = os.path.join(data_dir, 'summary.train.json')
+
+    train_questions = read_summary_questions(train_path)
+
+    question = train_questions[0]
 
     question = 'What is the effect of TRH on myocardial contractility?'
     sentence = 'Acute intravenous administration of TRH to rats with ischemic cardiomyopathy caused a significant increase in heart rate, mean arterial pressure, cardiac output, stroke volume, and cardiac contractility'
