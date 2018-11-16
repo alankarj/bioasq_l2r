@@ -1,6 +1,7 @@
 """ Offline Supervised Model Train and Testing
 Usage:
     offline.py train [options]
+    offline.py baseline [options]
     offline.py test --model-path=<file> [options]
     offline.py example --model-path=<file> [options]
     offline.py visualize [options]
@@ -12,7 +13,7 @@ Options:
     --feature=<str>         Feature type to use [default: TF-IDF]
     --classweight           Balance data using class weights
     --label=<str>           Label type to use [default: JACCARD]
-    --interval=<float>      Interval for binary classification [default: 0.1]
+    -i --interval=<float>      Interval for binary classification [default: 0.1]
     --model=<str>           Model type to use [default: LinearSVC]
     --seed=<int>            Seed number for random generator [default: 11731]
     --save-dir=<file>       Directory to save trained model [default: ./save]
@@ -34,9 +35,9 @@ from sklearn.decomposition import PCA
 from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.manifold import TSNE
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, mean_absolute_error, mean_squared_error
 from sklearn.neural_network import MLPClassifier
-from sklearn.svm import LinearSVC
+from sklearn.svm import SVC, LinearSVC
 
 from deiis.model import DataSet, Serializer
 
@@ -263,8 +264,20 @@ def featurize(summary_questions, all_featurizers, sentence_only=False, question_
         pca.fit(X)
 
     X = pca.transform(X)
-
     return X
+
+
+def convert_cat2score(Y_pred, cat2score):
+    interval = cat2score[1] - cat2score[0]
+
+    scores = []
+
+    for y in Y_pred:
+        cat = cat2score[y]
+        s = interval * (cat + 0.5)
+        scores.append(s)
+    scores = np.array(scores)
+    return scores
 
 
 def train(opt):
@@ -297,19 +310,33 @@ def train(opt):
 
     # Load model
     model_type = opt["--model"]
+    print("Model:", model_type)
     if model_type == "LogisticRegression":
         clf = LogisticRegression()
     elif model_type == "LinearSVC":
         clf = LinearSVC()
+    elif model_type == "SVC":
+        clf = SVC(max_iter=-1, verbose=True)
     elif model_type == "MLPClassifier":
         clf = MLPClassifier()
     else:
         raise ValueError("Unknown model: {}".format(model_type))
 
+    # Train
+    print("Start training")
     clf.fit(X_train, Y_train_bin)
-    train_acc = evaluate(clf, X_train, Y_train_bin)
+
+    Y_train_pred = clf.predict(X_train)
+    train_acc = accuracy_score(Y_train_bin, Y_train_pred)
 
     print("train_acc", train_acc)
+
+    Y_train_pred_scores = convert_cat2score(Y_train_pred, cat2score)
+
+    mae = mean_absolute_error(Y_train, Y_train_pred_scores)
+    mse = mean_squared_error(Y_train, Y_train_pred_scores)
+    print("mean absolute error", mae)
+    print("mean squared error", mse)
 
     # Save Model
     model = ModelWrapper(
@@ -378,6 +405,78 @@ def test(opt):
 
     print('valid_acc', valid_acc)
 
+    # Mean Squared Error
+    Y_valid_pred_scores = convert_cat2score(Y_valid_pred, cat2score)
+
+    mae = mean_absolute_error(Y_valid, Y_valid_pred_scores)
+    mse = mean_squared_error(Y_valid, Y_valid_pred_scores)
+    print("mean absolute error", mae)
+    print("mean squared error", mse)
+
+
+def baseline(opt):
+    """ Example Usage of Testing
+    """
+    data_dir = opt["--data-dir"]
+    train_path = os.path.join(data_dir, "summary.train.json")
+    valid_path = os.path.join(data_dir, "summary.valid.json")
+    train_questions = read_summary_questions(train_path)
+    valid_questions = read_summary_questions(valid_path)
+
+    label_type = opt["--label"]
+
+    Y_train = get_labels(train_questions, label_type)
+    Y_valid = get_labels(valid_questions, label_type)
+
+    interval = float(opt["--interval"])
+
+    Y_train_bin, cat2score = score_to_bin(Y_train, interval)
+    Y_valid_bin, cat2score = score_to_bin(Y_valid, interval)
+
+    print("Train Set")
+    print("Counting labels...")
+    unique, counts = np.unique(Y_train_bin, return_counts=True)
+    count_dict = dict(zip(unique, counts))
+    print(count_dict)
+
+    majority_class = max(count_dict, key=count_dict.get)
+
+    Y_train_pred = [majority_class] * int(Y_train_bin.size)
+
+    train_acc = accuracy_score(Y_train_bin, Y_train_pred)
+
+    print('train_acc', train_acc)
+
+    # Mean Squared Error
+    Y_train_pred_scores = convert_cat2score(Y_train_pred, cat2score)
+
+    mae = mean_absolute_error(Y_train, Y_train_pred_scores)
+    mse = mean_squared_error(Y_train, Y_train_pred_scores)
+    print("mean absolute error", mae)
+    print("mean squared error", mse)
+
+    print("Validation Set")
+    print("Counting labels...")
+    unique, counts = np.unique(Y_valid_bin, return_counts=True)
+    count_dict = dict(zip(unique, counts))
+    print(count_dict)
+
+    majority_class = max(count_dict, key=count_dict.get)
+
+    Y_valid_pred = [majority_class] * int(Y_valid_bin.size)
+
+    valid_acc = accuracy_score(Y_valid_bin, Y_valid_pred)
+
+    print('valid_acc', valid_acc)
+
+    # Mean Squared Error
+    Y_valid_pred_scores = convert_cat2score(Y_valid_pred, cat2score)
+
+    mae = mean_absolute_error(Y_valid, Y_valid_pred_scores)
+    mse = mean_squared_error(Y_valid, Y_valid_pred_scores)
+    print("mean absolute error", mae)
+    print("mean squared error", mse)
+
 
 def example(opt):
     model_path = opt["--model-path"]
@@ -443,3 +542,5 @@ if __name__ == "__main__":
         example(opt)
     elif opt["visualize"]:
         visualize(opt)
+    elif opt["baseline"]:
+        baseline(opt)
