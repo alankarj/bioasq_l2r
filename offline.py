@@ -1,14 +1,14 @@
 """ Offline Supervised Model Train and Testing
 Usage:
-    offline.py train --model=<str> [options]
+    offline.py train [options]
     offline.py test --model-path=<file> [options]
     offline.py example --model-path=<file> [options]
+    offline.py visualize [options]
 
 Options:
     --data-dir=<file>       Directory to data [default: ./data/summary]
     --sentence-only         Sentence only features
     --question-only         Question only features 
-    --pca                   Use PCA to normalize features
     --feature=<str>         Feature type to use [default: TF-IDF]
     --classweight           Balance data using class weights
     --label=<str>           Label type to use [default: JACCARD]
@@ -18,26 +18,27 @@ Options:
     --save-dir=<file>       Directory to save trained model [default: ./save]
     --model-path=<file>     Path to model pickle [default: ./save/LinearSVC_TF-IDF_JACCARD_0.1.pickle]
 """
-import argparse
-import math
+import copy
 import json
+import math
 import os
 import pickle
 import random
 
 import numpy as np
-import numpy as np
 from docopt import docopt
+from nltk.corpus import stopwords
+from nltk.tokenize import sent_tokenize, word_tokenize
 from scipy.sparse import hstack
-
-from deiis.model import DataSet, Serializer
-from Featurizer import vectorize
-
 from sklearn.decomposition import PCA
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
+from sklearn.manifold import TSNE
 from sklearn.metrics import accuracy_score
 from sklearn.neural_network import MLPClassifier
 from sklearn.svm import LinearSVC
+
+from deiis.model import DataSet, Serializer
 
 
 def score_to_bin(Y, interval=0.1):
@@ -76,8 +77,9 @@ class ModelWrapper(object):
     - label to score dict
     """
 
-    def __init__(self, featurizers, clf, cat2score):
+    def __init__(self, featurizers, label_type, clf, cat2score):
         self.featurizers = featurizers
+        self.label_type = label_type
         self.clf = clf
         self.cat2score = cat2score
 
@@ -107,7 +109,38 @@ class ModelWrapper(object):
         return score
 
 
-def read_summary_questions(filepath, get_all_sentences=True):
+def get_sentences(question):
+    sentences = []
+    for snippet in question.snippets:
+        text = unicode(snippet.text).encode("ascii", "ignore")
+        if text == "":
+            continue
+        try:
+            sentences += sent_tokenize(text)
+        except:
+            sentences += text.split(". ")  # Notice the space after the dot
+    return sentences
+
+
+def get_all_sentences(summary_type_questions):
+    #
+    num_sentences = 0
+    for question in summary_type_questions:
+        question.sentences = get_sentences(question)
+
+        # print "##############################################################"
+        # print question.ideal_answer
+
+        # for sentence in question.sentences:
+        #     print similarity.calculateSimilarity(sentence, question.ideal_answer[0])
+
+        num_sentences += len(question.sentences)
+
+    print 'Total number of sentences: ', num_sentences
+    return summary_type_questions
+
+
+def read_summary_questions(filepath):
     with open(filepath, 'r') as fin:
         dataset = Serializer.parse(fin, DataSet)
 
@@ -116,37 +149,91 @@ def read_summary_questions(filepath, get_all_sentences=True):
         if question.type == "summary":
             summary_questions.append(question)
 
-    summary_questions = vectorize.get_all_sentences(summary_questions)
-
+    summary_questions = get_all_sentences(summary_questions)
     return summary_questions
 
 
-def load_and_featurize(data_path, feature_type, label_type, sentence_only=False, question_only=False):
-
-    summary_type_questions = read_summary_questions(data_path)
-    print 'Total summary-type questions: ', len(summary_type_questions)
-
-    # Get Feature and Label
-    all_featurizers, all_features = vectorize.get_features(
-        summary_type_questions, feature_type=feature_type)
-    labels = vectorize.get_labels(
-        summary_type_questions, label_type=label_type)
-
-    assert not (question_only and sentence_only)
-    if sentence_only:
-        X = all_features[0].toarray()
-    elif question_only:
-        X = all_features[1].toarray()
+def create_featurizers(feature_type):
+    """Create featurizers and return as list 
+        1. sentence featurizer
+        2. question featurizer
+        3. pca 
+    """
+    # Sentence & Question
+    if feature_type == "COUNT":
+        sent_featurizer = CountVectorizer(max_features=10000)
+    elif feature_type == "TF-IDF":
+        sent_featurizer = TfidfVectorizer(max_features=10000)
     else:
-        X = hstack(all_features).toarray()
-    Y = np.array(labels)
-    return X, Y, all_featurizers
+        raise ValueError("Unknown feature_type: {}".format(feature_type))
+
+    question_featurizer = copy.deepcopy(sent_featurizer)
+
+    # PCA
+    pca = PCA(n_components=300)
+    all_featurizers = [sent_featurizer, question_featurizer, pca]
+    return all_featurizers
 
 
-def featurize(summary_questions, all_featurizers, label_type, sentence_only=False, question_only=False):
+class SimilarityJaccard(object):
+    def __init__(self, stopWords):
+        self.stopWords = stopWords
+
+    def calculateSimilarity(self, s1, s2):
+        # s2 is assumed to be a set of tokens
+        set1 = set([
+            i.lower() for i in word_tokenize(s1)
+            if i.lower() not in self.stopWords
+        ])
+        set2 = s2
+        return float(len(set1.intersection(set2))) / len(set1.union(set2))
+
+
+def get_labels(summary_type_questions, label_type):
+    print "Getting labels..."
+    all_scores = list()
+    if label_type == "JACCARD":
+        stopWords = set(stopwords.words('english'))
+        similarity = SimilarityJaccard(stopWords)
+
+        for i, question in enumerate(summary_type_questions):
+            #print "Question-", i
+
+            list_of_sets = []
+
+            if type(question.ideal_answer) == list:
+                for ideal_answer in question.ideal_answer:
+                    list_of_sets.append(
+                        set([
+                            i.lower() for i in word_tokenize(ideal_answer)
+                            if i.lower() not in stopWords
+                        ]))
+            else:
+                list_of_sets.append(
+                    set([
+                        i.lower() for i in word_tokenize(question.ideal_answer)
+                        if i.lower() not in stopWords
+                    ]))
+
+            for sentence in question.sentences:
+                scores = []
+                for s2 in list_of_sets:
+                    scores.append(similarity.calculateSimilarity(sentence, s2))
+
+                all_scores.append(sum(scores) / len(scores))
+    else:
+        raise ValueError("Unknown label type: {}".format(label_type))
+
+    all_scores = np.array(all_scores)
+    return all_scores
+
+
+def featurize(summary_questions, all_featurizers, sentence_only=False, question_only=False, train=False):
     """
     Featurize with given featurizer
     """
+    print("[featurize]", "train", train)
+    # Process into question + sentence data samples
     question_list = []
     sentence_list = []
     for question in summary_questions:
@@ -154,10 +241,15 @@ def featurize(summary_questions, all_featurizers, label_type, sentence_only=Fals
             question_list.append(question.body)
             sentence_list.append(sentence)
 
+    # Process word tokens into feature array
+    sent_featurizer, question_featurizer, pca = all_featurizers
+
+    if train:
+        sent_featurizer.fit(sentence_list)
+        question_featurizer.fit(question_list)
+
     sentence_features = all_featurizers[0].transform(sentence_list)
     question_features = all_featurizers[1].transform(question_list)
-
-    labels = vectorize.get_labels(summary_questions, label_type=label_type)
 
     if sentence_only:
         X = sentence_features.toarray()
@@ -166,16 +258,18 @@ def featurize(summary_questions, all_featurizers, label_type, sentence_only=Fals
     else:
         X = hstack([sentence_features, question_features]).toarray()
 
-    if len(all_featurizers) == 3:
-        print("Use PCA")
-        pca = all_featurizers[2]
-        X = pca.transform(X)
+    # PCA the feature array
+    if train:
+        pca.fit(X)
 
-    Y = np.array(labels)
-    return X, Y
+    X = pca.transform(X)
+
+    return X
 
 
 def train(opt):
+
+    # Process data
     data_dir = opt["--data-dir"]
     train_path = os.path.join(data_dir, "summary.train.json")
 
@@ -184,19 +278,15 @@ def train(opt):
 
     question_only = bool(opt["--question-only"])
     sentence_only = bool(opt["--sentence-only"])
-    use_pca = bool(opt["--pca"])
 
-    X_train, Y_train, all_featurizers = load_and_featurize(
-        train_path, feature_type, label_type, sentence_only, question_only)
+    train_questions = read_summary_questions(train_path)
+    all_featurizers = create_featurizers(feature_type)
 
-    if use_pca:
-        print("Use PCA")
-        pca = PCA(n_components=300)
-        X_train = pca.fit_transform(X_train)
-        all_featurizers.append(pca)
+    X_train = featurize(train_questions, all_featurizers,
+                        sentence_only, question_only, train=True)
+    Y_train = get_labels(train_questions, label_type)
 
-    print("X_train", X_train.shape)
-    print("Y_train", Y_train.shape)
+    print("X_train", X_train.shape, "Y_train", Y_train.shape)
 
     interval = float(opt["--interval"])
     Y_train_bin, cat2score = score_to_bin(Y_train, interval)
@@ -205,6 +295,7 @@ def train(opt):
     unique, counts = np.unique(Y_train_bin, return_counts=True)
     print(dict(zip(unique, counts)))
 
+    # Load model
     model_type = opt["--model"]
     if model_type == "LogisticRegression":
         clf = LogisticRegression()
@@ -223,6 +314,7 @@ def train(opt):
     # Save Model
     model = ModelWrapper(
         all_featurizers,
+        label_type,
         clf,
         cat2score
     )
@@ -238,10 +330,9 @@ def train(opt):
 
     model_name = "{}_{}_{}_{}".format(
         model_type, feature_type, label_type, interval)
-    if use_pca:
-        model_name += "_pca"
-    save_path = os.path.join(save_dir, model_name + ".pickle")
 
+    save_path = os.path.join(save_dir, model_name + ".pickle")
+    print("saving model to {}".format(save_path))
     with open(save_path, "wb") as fout:
         pickle.dump(model, fout)
 
@@ -251,41 +342,32 @@ def test(opt):
     """
     data_dir = opt["--data-dir"]
     valid_path = os.path.join(data_dir, "summary.valid.json")
-    #test_path = os.path.join(data_dir, "summary.test.json")
-
     valid_questions = read_summary_questions(valid_path)
-    #test_questions = read_summary_questions(test_path)
 
     model_path = opt["--model-path"]
     with open(model_path, 'rb') as fin:
         model = pickle.load(fin)
 
-    label_type = opt["--label"]
+    label_type = model.label_type
 
     question_only = bool(opt["--question-only"])
     sentence_only = bool(opt["--sentence-only"])
 
-    X_valid, Y_valid = featurize(
-        valid_questions, model.featurizers, label_type, sentence_only, question_only)
+    X_valid = featurize(valid_questions, model.featurizers,
+                        sentence_only, question_only)
+    Y_valid = get_labels(valid_questions, label_type)
 
     print("X_valid", X_valid.shape, "Y_valid", Y_valid.shape)
-    """
-    X_test, Y_test = featurize(
-        test_questions, model.featurizers, label_type, sentence_only, question_only)
-    print("X_test", X_test.shape, "Y_test", Y_test.shape)
-    """
     cat2score = model.cat2score
     interval = cat2score[1] - cat2score[0]
 
     Y_valid_bin, _ = score_to_bin(Y_valid, interval)
-    #Y_test_bin, _ = score_to_bin(Y_test, interval)
 
     print("Counting labels...")
     unique, counts = np.unique(Y_valid_bin, return_counts=True)
     print(dict(zip(unique, counts)))
 
     clf = model.clf
-    #valid_acc = evaluate(clf, X_valid, Y_valid_bin)
 
     Y_valid_pred = clf.predict(X_valid)
     valid_acc = accuracy_score(Y_valid_bin, Y_valid_pred)
@@ -296,21 +378,11 @@ def test(opt):
 
     print('valid_acc', valid_acc)
 
-    #test_acc = evaluate(clf, X_test, Y_test_bin)
-    #print('test_acc', test_acc)
-
 
 def example(opt):
     model_path = opt["--model-path"]
     with open(model_path, 'rb') as fin:
         model = pickle.load(fin)
-
-    data_dir = opt["--data-dir"]
-    train_path = os.path.join(data_dir, 'summary.train.json')
-
-    train_questions = read_summary_questions(train_path)
-
-    question = train_questions[0]
 
     question = 'What is the effect of TRH on myocardial contractility?'
     sentence = 'Acute intravenous administration of TRH to rats with ischemic cardiomyopathy caused a significant increase in heart rate, mean arterial pressure, cardiac output, stroke volume, and cardiac contractility'
@@ -322,6 +394,44 @@ def example(opt):
     print("Score:", score)
 
 
+def visualize(opt):
+    data_dir = opt["--data-dir"]
+    train_path = os.path.join(data_dir, "summary.train.json")
+
+    print("Read train")
+    feature_type = opt["--feature"]
+    label_type = opt["--label"]
+    sentence_only = bool(opt["--sentence-only"])
+    question_only = bool(opt["--question-only"])
+
+    train_questions = read_summary_questions(train_path)
+    featurizers = create_featurizers(feature_type)
+    X_train = featurize(train_questions, featurizers,
+                        sentence_only, question_only, train=True)
+    Y_train = get_labels(train_questions, label_type)
+
+    interval = float(opt["--interval"])
+    Y_train_bin, cat2score = score_to_bin(Y_train, interval)
+
+    print("Perform TSNE train")
+    X_train_tsne = TSNE(verbose=2).fit_transform(X_train)
+
+    print("Visualize train dataset")
+    import matplotlib
+    import matplotlib.pyplot as plt
+
+    num_labels = len(cat2score)
+
+    def plot_and_save(X, Y, num_labels, save_path):
+        plt.scatter(X[:, 0], X[:, 1], c=Y,
+                    cmap=plt.cm.get_cmap("jet", num_labels))
+        plt.colorbar(ticks=range(num_labels))
+        plt.clim(-0.5, num_labels-0.5)
+        plt.savefig(save_path)
+
+    plot_and_save(X_train_tsne, Y_train_bin, num_labels, "train.png")
+
+
 if __name__ == "__main__":
     opt = docopt(__doc__)
 
@@ -331,3 +441,5 @@ if __name__ == "__main__":
         test(opt)
     elif opt["example"]:
         example(opt)
+    elif opt["visualize"]:
+        visualize(opt)
