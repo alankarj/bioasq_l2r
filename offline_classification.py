@@ -103,6 +103,14 @@ class ModelWrapper(object):
         return score
 
 
+def save_to_pickle(obj, save_name):
+    """
+    Save Model
+    """
+    with open(save_name, 'wb') as fout:
+        pickle.dump(obj, fout)
+
+
 def get_sentences(question):
     sentences = []
     for snippet in question.snippets:
@@ -332,12 +340,7 @@ def train(opt):
     print("mean squared error", mse)
 
     # Save Model
-    model = ModelWrapper(
-        all_featurizers,
-        label_type,
-        clf,
-        cat2score
-    )
+    obj = (all_featurizers, label_type, clf, cat2score)
 
     save_dir = opt["--save-dir"]
     if not os.path.exists(save_dir):
@@ -354,7 +357,7 @@ def train(opt):
     save_path = os.path.join(save_dir, model_name + ".pickle")
     print("saving model to {}".format(save_path))
     with open(save_path, "wb") as fout:
-        pickle.dump(model, fout)
+        pickle.dump(obj, fout)
 
 
 def test(opt):
@@ -366,19 +369,18 @@ def test(opt):
 
     model_path = opt["--model-path"]
     with open(model_path, 'rb') as fin:
-        model = pickle.load(fin)
+        (all_featurizers, label_type, clf, cat2score) = pickle.load(fin)
 
-    label_type = model.label_type
+    label_type = label_type
 
     question_only = bool(opt["--question-only"])
     sentence_only = bool(opt["--sentence-only"])
 
-    X_valid = featurize(valid_questions, model.featurizers,
+    X_valid = featurize(valid_questions, all_featurizers,
                         sentence_only, question_only)
     Y_valid = get_labels(valid_questions, label_type)
 
     print("X_valid", X_valid.shape, "Y_valid", Y_valid.shape)
-    cat2score = model.cat2score
     interval = cat2score[1] - cat2score[0]
 
     Y_valid_bin, _ = score_to_bin(Y_valid, interval)
@@ -386,8 +388,6 @@ def test(opt):
     print("Counting labels...")
     unique, counts = np.unique(Y_valid_bin, return_counts=True)
     print(dict(zip(unique, counts)))
-
-    clf = model.clf
 
     Y_valid_pred = clf.predict(X_valid)
     valid_acc = accuracy_score(Y_valid_bin, Y_valid_pred)

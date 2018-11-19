@@ -87,6 +87,14 @@ class RegressionModelWrapper(object):
         return pred_score[0]
 
 
+def save_to_pickle(obj, save_name):
+    """
+    Save Model
+    """
+    with open(save_name, 'wb') as fout:
+        pickle.dump(obj, fout)
+
+
 def get_sentences(question):
     sentences = []
     for snippet in question.snippets:
@@ -302,12 +310,7 @@ def train(opt):
     print("mean squared error", mse)
 
     # Save Model
-    model = RegressionModelWrapper(
-        all_featurizers,
-        label_type,
-        clf,
-        scale
-    )
+    obj = (all_featurizers, label_type, clf, scale)
 
     save_dir = opt["--save-dir"]
     if not os.path.exists(save_dir):
@@ -324,7 +327,7 @@ def train(opt):
     save_path = os.path.join(save_dir, model_name + ".pickle")
     print("saving model to {}".format(save_path))
     with open(save_path, "wb") as fout:
-        pickle.dump(model, fout)
+        pickle.dump(obj, fout)
 
 
 def test(opt):
@@ -336,23 +339,18 @@ def test(opt):
 
     model_path = opt["--model-path"]
     with open(model_path, 'rb') as fin:
-        model = pickle.load(fin)
-
-    label_type = model.label_type
+        (all_featurizers, label_type, clf, scale) = pickle.load(fin)
 
     question_only = bool(opt["--question-only"])
     sentence_only = bool(opt["--sentence-only"])
 
-    X_valid = featurize(valid_questions, model.featurizers,
+    X_valid = featurize(valid_questions, all_featurizers,
                         sentence_only, question_only)
     Y_valid = get_labels(valid_questions, label_type)
 
     print("X_valid", X_valid.shape, "Y_valid", Y_valid.shape)
-    scale = model.scale
 
     Y_valid_scale = scale_scores(Y_valid, scale)
-
-    clf = model.clf
 
     Y_valid_pred_scale = clf.predict(X_valid)
 
