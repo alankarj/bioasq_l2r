@@ -1,4 +1,13 @@
 # CMU 11-791
+
+## Labelization and Featurization
+After installing deiis, run the following code to get labels and features.
+```bash
+python featurize.py data/training.json
+```
+**Labels:** Only Jaccard implemented so far. <br/>
+**Featurizer:** You can choose between count-based and tf-idf features. Also, you can choose whether you just want sentence-only or sentence + question features by setting the sentence_only flag. The return value contains a tuple of (list of featurizer objects, list of feature vectors). The second list would contain numpy arrays of shape 10,005 * max(num_features). If you wish to use both sentence and question features, you can concatenate these arrays along columns.
+
 ## BioASQ
 
 This project contains a number of modules to be used as a starting point for the [BioASQ](http://bioasq.org) challenge:
