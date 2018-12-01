@@ -35,6 +35,7 @@ from sklearn.linear_model import LinearRegression
 from sklearn.manifold import TSNE
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.svm import LinearSVR, SVR
+from rouge import Rouge as RougeLib
 
 from deiis.model import DataSet, Serializer
 
@@ -164,6 +165,7 @@ def create_featurizers(feature_type):
 class SimilarityJaccard(object):
     def __init__(self, stopWords):
         self.stopWords = stopWords
+        self.r = RougeLib()
 
     def calculateSimilarity(self, s1, s2):
         # s2 is assumed to be a set of tokens
@@ -174,41 +176,49 @@ class SimilarityJaccard(object):
         set2 = s2
         return float(len(set1.intersection(set2))) / len(set1.union(set2))
 
+    def calculateRouge(self, s1, s2):
+        sent1 = s1
+        sent2 = " ".join(s2)
+        return self.r.get_scores(sent1, sent2)[0]['rouge-2']
+
 
 def get_labels(summary_type_questions, label_type):
     print "Getting labels..."
     all_scores = list()
-    if label_type == "JACCARD":
-        stopWords = set(stopwords.words('english'))
-        similarity = SimilarityJaccard(stopWords)
 
-        for i, question in enumerate(summary_type_questions):
-            #print "Question-", i
+    stopWords = set(stopwords.words('english'))
+    similarity = SimilarityJaccard(stopWords)
 
-            list_of_sets = []
+    for i, question in enumerate(summary_type_questions):
+        #print "Question-", i
 
-            if type(question.ideal_answer) == list:
-                for ideal_answer in question.ideal_answer:
-                    list_of_sets.append(
-                        set([
-                            i.lower() for i in word_tokenize(ideal_answer)
-                            if i.lower() not in stopWords
-                        ]))
-            else:
+        list_of_sets = []
+
+        if type(question.ideal_answer) == list:
+            for ideal_answer in question.ideal_answer:
                 list_of_sets.append(
                     set([
-                        i.lower() for i in word_tokenize(question.ideal_answer)
+                        i.lower() for i in word_tokenize(ideal_answer)
                         if i.lower() not in stopWords
                     ]))
+        else:
+            list_of_sets.append(
+                set([
+                    i.lower() for i in word_tokenize(question.ideal_answer)
+                    if i.lower() not in stopWords
+                ]))
 
-            for sentence in question.sentences:
-                scores = []
-                for s2 in list_of_sets:
+        for sentence in question.sentences:
+            scores = []
+            for s2 in list_of_sets:
+                if label_type == "JACCARD":
                     scores.append(similarity.calculateSimilarity(sentence, s2))
+                elif label_type == "ROUGE":
+                    scores.append(similarity.calculateRouge(sentence, s2))
+                else:
+                    raise ValueError("Unknown label type: {}".format(label_type))
 
-                all_scores.append(sum(scores) / len(scores))
-    else:
-        raise ValueError("Unknown label type: {}".format(label_type))
+            all_scores.append(sum(scores) / len(scores))
 
     all_scores = np.array(all_scores)
     return all_scores
