@@ -34,9 +34,10 @@ from sklearn.decomposition import PCA
 from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.manifold import TSNE
-from sklearn.metrics import accuracy_score, mean_absolute_error, mean_squared_error
+from sklearn.metrics import accuracy_score, mean_absolute_error, mean_squared_error, classification_report
 from sklearn.neural_network import MLPClassifier
 from sklearn.svm import SVC, LinearSVC
+from sklearn.utils.class_weight import compute_class_weight, compute_sample_weight
 
 from deiis.model import DataSet, Serializer
 
@@ -325,7 +326,8 @@ def train(opt):
 
     # Train
     print("Start training")
-    clf.fit(X_train, Y_train_bin)
+    sample_weight = compute_sample_weight("balanced", Y_train_bin)
+    clf.fit(X_train, Y_train_bin, sample_weight=sample_weight)
 
     Y_train_pred = clf.predict(X_train)
     train_acc = accuracy_score(Y_train_bin, Y_train_pred)
@@ -397,6 +399,11 @@ def test(opt):
     print(dict(zip(unique, counts)))
 
     print('valid_acc', valid_acc)
+
+    valid_report = classification_report(
+        Y_valid_bin, Y_valid_pred, output_dict=True)
+    print(json.dumps(valid_report, indent=4))
+    #print("Valid report\n", valid_report)
 
     # Mean Squared Error
     Y_valid_pred_scores = convert_cat2score(Y_valid_pred, cat2score)
