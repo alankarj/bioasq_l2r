@@ -12,6 +12,7 @@ Options:
     -f --feature=<str>      Feature type to use [default: TF-IDF]
     -l --label=<str>        Label type to use [default: JACCARD]
     -s --scale=<int>        Scale scores and cut off to integer [default: 100]
+    -i --interval=<float>   Bucket interval [default: 0.1]
     --model=<str>           Model type to use [default: LinearRegression]
     --seed=<int>            Seed number for random generator [default: 11731]
     --save-dir=<file>       Directory to save trained model [default: ./save_regression]
@@ -35,6 +36,7 @@ from sklearn.linear_model import LinearRegression
 from sklearn.manifold import TSNE
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.svm import LinearSVR, SVR
+from sklearn.utils.class_weight import compute_sample_weight
 
 from deiis.model import DataSet, Serializer
 
@@ -252,6 +254,28 @@ def featurize(summary_questions, all_featurizers, sentence_only=False, question_
     return X
 
 
+def score_to_bin(Y, interval=0.1):
+    """
+    Maps scores to category, and also returns a dictionary
+    """
+    # [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0 ]
+    cat2score = {}
+    intervals = np.arange(0, 1.0, interval)
+    for idx, score in enumerate(intervals):
+        cat2score[idx] = score
+
+    Y_cat = []
+    for y in Y:
+        assert 0 <= y <= 1.0
+        label = int(math.floor(y/interval))
+        if y == 1:
+            label = len(intervals)-1
+        Y_cat.append(label)
+
+    Y_cat = np.array(Y_cat)
+    return Y_cat, cat2score
+
+
 def train(opt):
 
     # Process data
@@ -291,7 +315,12 @@ def train(opt):
 
     # Train
     print("Start training")
-    clf.fit(X_train, Y_train_scale)
+    # Create sample weights
+    interval = float(opt['--interval'])
+    Y_train_bin, cat2score = score_to_bin(Y_train, interval)
+    sample_weight = compute_sample_weight("balanced", Y_train_bin)
+
+    clf.fit(X_train, Y_train_scale, sample_weight=sample_weight)
 
     Y_train_pred_scale = clf.predict(X_train)
     Y_train_pred = scale_scores(Y_train_pred_scale, scale=1./scale)
@@ -367,74 +396,6 @@ def test(opt):
     print("Unscaled:")
     mae = mean_absolute_error(Y_valid, Y_valid_pred)
     mse = mean_squared_error(Y_valid, Y_valid_pred)
-    print("mean absolute error", mae)
-    print("mean squared error", mse)
-
-
-def baseline(opt):
-    """ Baseline with majority class prediction
-    """
-    data_dir = opt["--data-dir"]
-    train_path = os.path.join(data_dir, "summary.train.json")
-    valid_path = os.path.join(data_dir, "summary.valid.json")
-    train_questions = read_summary_questions(train_path)
-    valid_questions = read_summary_questions(valid_path)
-
-    label_type = opt["--label"]
-
-    Y_train = get_labels(train_questions, label_type)
-    Y_valid = get_labels(valid_questions, label_type)
-
-    scale = float(opt["--scale"])
-
-    Y_train_scale = scale_scores(Y_train, scale)
-    Y_valid_scale = scale_scores(Y_valid, scale)
-
-    print("Train Set")
-    print("Counting labels...")
-
-    counts = np.bincount(Y_train_scale.astype("int64"))
-    majority_score = np.argmax(counts)
-
-    print("Scaled")
-    Y_train_pred_scale = [majority_score] * int(Y_train.size)
-
-    mae = mean_absolute_error(Y_train_scale, Y_train_pred_scale)
-    mse = mean_squared_error(Y_train_scale, Y_train_pred_scale)
-
-    print("mean absolute error", mae)
-    print("mean squared error", mse)
-
-    print("Unscaled")
-    Y_train_pred = scale_scores(Y_train_pred_scale, 1./scale)
-
-    mae = mean_absolute_error(Y_train, Y_train_pred)
-    mse = mean_squared_error(Y_train, Y_train_pred)
-
-    print("mean absolute error", mae)
-    print("mean squared error", mse)
-
-    print("Valid Set")
-    print("Counting labels...")
-
-    counts = np.bincount(Y_valid_scale.astype("int64"))
-    majority_score = np.argmax(counts)
-
-    print("Scaled")
-    Y_valid_pred_scale = [majority_score] * int(Y_valid.size)
-
-    mae = mean_absolute_error(Y_valid_scale, Y_valid_pred_scale)
-    mse = mean_squared_error(Y_valid_scale, Y_valid_pred_scale)
-
-    print("mean absolute error", mae)
-    print("mean squared error", mse)
-
-    print("Unscaled")
-    Y_valid_pred = scale_scores(Y_valid_pred_scale, 1./scale)
-
-    mae = mean_absolute_error(Y_valid, Y_valid_pred)
-    mse = mean_squared_error(Y_valid, Y_valid_pred)
-
     print("mean absolute error", mae)
     print("mean squared error", mse)
 
