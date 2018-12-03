@@ -133,7 +133,8 @@ def read_summary_questions(filepath):
 
     summary_questions = []
     for question in dataset.questions:
-        if question.type == "summary":
+        print question.type
+        if question.type == "summary" or question.type == "factoid":
             summary_questions.append(question)
 
     summary_questions = get_all_sentences(summary_questions)
@@ -179,7 +180,9 @@ class SimilarityJaccard(object):
     def calculateRouge(self, s1, s2):
         sent1 = s1
         sent2 = " ".join(s2)
-        return self.r.get_scores(sent1, sent2)[0]['rouge-2']
+        # print "Sentence-1", sent1
+        # print "Sentence-2", sent2
+        return self.r.get_scores(sent1, sent2)[0]['rouge-2']['r']
 
 
 def get_labels(summary_type_questions, label_type):
@@ -189,8 +192,11 @@ def get_labels(summary_type_questions, label_type):
     stopWords = set(stopwords.words('english'))
     similarity = SimilarityJaccard(stopWords)
 
+    count = 0
+
     for i, question in enumerate(summary_type_questions):
-        #print "Question-", i
+        print "Question-", i
+        print "ID: ", question.id
 
         list_of_sets = []
 
@@ -209,6 +215,7 @@ def get_labels(summary_type_questions, label_type):
                 ]))
 
         for sentence in question.sentences:
+            print sentence
             scores = []
             for s2 in list_of_sets:
                 if label_type == "JACCARD":
@@ -218,9 +225,20 @@ def get_labels(summary_type_questions, label_type):
                 else:
                     raise ValueError("Unknown label type: {}".format(label_type))
 
-            all_scores.append(sum(scores) / len(scores))
+            one_score = sum(scores) / len(scores)
+            # if one_score > 0.1:
+            #     count += 1
+            #     print sentence
+            #     print list_of_sets
+            all_scores.append(one_score)
 
     all_scores = np.array(all_scores)
+    print all_scores
+    print "Average: ", np.mean(all_scores)
+    print "Std. Dev.: ", np.std(all_scores)
+    print "Min.: ", np.min(all_scores)
+    print "Max.: ", np.max(all_scores)
+    print "Count: ", count
     return all_scores
 
 
@@ -266,7 +284,7 @@ def train(opt):
 
     # Process data
     data_dir = opt["--data-dir"]
-    train_path = os.path.join(data_dir, "summary.train.json")
+    train_path = os.path.join(data_dir, "summary_factoid.train.json")
 
     feature_type = opt["--feature"]
     label_type = opt["--label"]
@@ -344,7 +362,7 @@ def test(opt):
     """ Example Usage of Testing
     """
     data_dir = opt["--data-dir"]
-    valid_path = os.path.join(data_dir, "summary.valid.json")
+    valid_path = os.path.join(data_dir, "summary_factoid.valid.json")
     valid_questions = read_summary_questions(valid_path)
 
     model_path = opt["--model-path"]
