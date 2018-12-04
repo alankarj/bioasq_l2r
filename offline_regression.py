@@ -42,8 +42,8 @@ from sklearn.svm import SVR, LinearSVR
 from sklearn.utils.class_weight import compute_sample_weight
 
 from deiis.model import DataSet, Serializer
-from rouge import Rouge as RougeLib
-from Featurizer.custom_featurizer import CustomFeaturizer
+from custom_featurizer import CustomFeaturizer
+from similarity_scoring import SimilarityJaccard
 import seaborn as sns
 import matplotlib.pyplot as plt
 sns.set(color_codes=True)
@@ -78,7 +78,10 @@ class RegressionModelWrapper(object):
     def score(self, question, sentence):
 
         # Featurizer
-        if len(self.featurizers) == 3:
+        if len(self.featurizers) == 4:
+            sent_featurizer, question_featurizer, custom_featurizer, pca = self.featurizers
+            custom_feature = custom_featurizer.transform([question], [sentence])
+        elif len(self.featurizers) == 3:
             sentence_featurizer, question_featurizer, pca = self.featurizers
         else:
             sentence_featurizer, question_featurizer = self.featurizers
@@ -86,9 +89,12 @@ class RegressionModelWrapper(object):
         sentence_feature = sentence_featurizer.transform([sentence])
         question_feature = question_featurizer.transform([question])
 
-        feature = hstack([sentence_feature, question_feature]).toarray()
-
         if len(self.featurizers) == 3:
+            feature = hstack([sentence_feature, question_feature]).toarray()
+        elif len(self.featurizers) == 4:
+            feature = hstack([sentence_feature, question_feature, custom_feature]).toarray()
+
+        if len(self.featurizers) >= 3:
             feature = pca.transform(feature)
 
         pred_scale = self.clf.predict(feature)
@@ -115,7 +121,13 @@ def get_sentences(question):
             sentences += sent_tokenize(text)
         except:
             sentences += text.split(". ")  # Notice the space after the dot
-    return sentences
+
+    clean_sentences = []
+    for sent in sentences:
+        sent = sent.lstrip(". ")
+        if sent.replace(" ", "") != "":
+            clean_sentences.append(sent)
+    return clean_sentences
 
 
 def get_all_sentences(summary_type_questions):
@@ -170,34 +182,6 @@ def create_featurizers(feature_type, custom_feat=False):
 
     all_featurizers = [sent_featurizer, question_featurizer, custom_featurizer, pca]
     return all_featurizers
-
-
-class SimilarityJaccard(object):
-    def __init__(self, stopWords, stemmer):
-        self.stopWords = stopWords
-        self.r = RougeLib()
-        self.stemmer = stemmer
-
-    def calculateSimilarity(self, s1, s2):
-        # s2 is assumed to be a set of tokens
-        set1 = set([
-            i.lower() for i in word_tokenize(s1)
-            if i.lower() not in self.stopWords
-        ])
-        set2 = s2
-        return float(len(set1.intersection(set2))) / len(set1.union(set2))
-
-    def calculateRouge(self, s1, s2):
-        sent1 = s1
-        sent2 = " ".join(s2)
-        # print "Sentence-1", sent1
-        # print "Sentence-2", sent2
-        return self.r.get_scores(sent1, sent2)[0]['rouge-2']['r']
-
-    def caculateSimilarityWithStem(self, s1, s2):
-        set1 = set([self.stemmer.stem(i.lower()) for i in word_tokenize(s1) if i.lower() not in self.stopWords])
-        set2 = set([self.stemmer.stem(i.lower()) for i in s2])
-        return float(len(set1.intersection(set2))) / len(set1.union(set2))
 
 
 def get_labels(summary_type_questions, label_type):
@@ -282,7 +266,8 @@ def featurize(summary_questions, all_featurizers, sentence_only=False, question_
 
     sentence_features = sent_featurizer.transform(sentence_list)
     question_features = question_featurizer.transform(question_list)
-    custom_features = custom_featurizer.transform(question_list, sentence_list)
+    if custom_featurizer is not None:
+        custom_features = custom_featurizer.transform(question_list, sentence_list)
 
     if sentence_only:
         X = sentence_features.toarray()
@@ -297,7 +282,7 @@ def featurize(summary_questions, all_featurizers, sentence_only=False, question_
 
     X = pca.transform(X)
     if custom_featurizer is not None:
-        X = hstack([X, custom_features]).toarray()
+        X = np.hstack((X, custom_features))
     return X
 
 
@@ -353,74 +338,79 @@ def train(opt):
     all_featurizers = create_featurizers(feature_type, custom_feat=custom_feat)
 
     print("Featurizing")
-    # X_train = featurize(train_questions, all_featurizers,
-    #                     sentence_only, question_only, train=True)
+    X_train = featurize(train_questions, all_featurizers,
+                        sentence_only, question_only, train=True)
 
     Y_train = get_labels(train_questions, label_type)
-    plot_dist(Y_train, file_name=label_type + "_" + str(factoid_also) + ".pdf")
+    # plot_dist(Y_train, file_name=label_type + "_" + str(factoid_also) + ".pdf")
     print "Number of sentences: ", Y_train.shape[0]
 
-    # print("X_train", X_train.shape, "Y_train", Y_train.shape)
-    #
-    # scale = int(opt['--scale'])
-    #
-    # Y_train_scale = scale_scores(Y_train, scale)
-    # # Load model
-    # model_type = opt["--model"]
-    # print("Model:", model_type)
-    # if model_type == "LinearRegression":
-    #     clf = LinearRegression()
-    # elif model_type == "LinearSVR":
-    #     clf = LinearSVR(verbose=2)
-    # elif model_type == "SVR":
-    #     clf = SVR(verbose=2)
-    # else:
-    #     raise ValueError("Unknown model: {}".format(model_type))
-    #
-    # # Train
-    # print("Start training")
-    # # # Create sample weights
-    # # interval = float(opt['--interval'])
-    # # Y_train_bin, cat2score = score_to_bin(Y_train, interval)
-    # # sample_weight = compute_sample_weight("balanced", Y_train_bin)
-    # # clf.fit(X_train, Y_train_scale, sample_weight=sample_weight)
-    #
-    # clf.fit(X_train, Y_train_scale)
-    #
-    # Y_train_pred_scale = clf.predict(X_train)
-    # Y_train_pred = scale_scores(Y_train_pred_scale, scale=1./scale)
-    #
-    # print("Scaled:")
-    # mae = mean_absolute_error(Y_train_scale, Y_train_pred_scale)
-    # mse = mean_squared_error(Y_train_scale, Y_train_pred_scale)
-    # print("mean absolute error", mae)
-    # print("mean squared error", mse)
-    #
-    # print("Unscaled:")
-    # mae = mean_absolute_error(Y_train, Y_train_pred)
-    # mse = mean_squared_error(Y_train, Y_train_pred)
-    # print("mean absolute error", mae)
-    # print("mean squared error", mse)
-    #
-    # # Save Model
-    # obj = (all_featurizers, label_type, clf, scale)
-    #
-    # save_dir = opt["--save-dir"]
-    # if not os.path.exists(save_dir):
-    #     os.makedirs(save_dir)
-    #
-    # if sentence_only:
-    #     feature_type += "_s_only"
-    # elif question_only:
-    #     feature_type += "_q_only"
-    #
-    # model_name = "{}_{}_{}_{}_{}".format(
-    #     model_type, feature_type, label_type, scale, custom_feat)
-    #
-    # save_path = os.path.join(save_dir, model_name + ".pickle")
-    # print("saving model to {}".format(save_path))
-    # with open(save_path, "wb") as fout:
-    #     pickle.dump(obj, fout)
+    print("X_train", X_train.shape, "Y_train", Y_train.shape)
+    print "X_train mean: ", X_train
+    scale = int(opt['--scale'])
+
+    Y_train_scale = scale_scores(Y_train, scale)
+    # Load model
+    model_type = opt["--model"]
+    print("Model:", model_type)
+    if model_type == "LinearRegression":
+        clf = LinearRegression()
+    elif model_type == "LinearSVR":
+        clf = LinearSVR(verbose=2)
+    elif model_type == "SVR":
+        clf = SVR(verbose=2)
+    else:
+        raise ValueError("Unknown model: {}".format(model_type))
+
+    # Train
+    print("Start training")
+    # # Create sample weights
+    # interval = float(opt['--interval'])
+    # Y_train_bin, cat2score = score_to_bin(Y_train, interval)
+    # sample_weight = compute_sample_weight("balanced", Y_train_bin)
+    # clf.fit(X_train, Y_train_scale, sample_weight=sample_weight)
+
+    clf.fit(X_train, Y_train_scale)
+
+    Y_train_pred_scale = clf.predict(X_train)
+    Y_train_pred = scale_scores(Y_train_pred_scale, scale=1./scale)
+
+    print("Scaled:")
+    mae = mean_absolute_error(Y_train_scale, Y_train_pred_scale)
+    mse = mean_squared_error(Y_train_scale, Y_train_pred_scale)
+    print("mean absolute error", mae)
+    print("mean squared error", mse)
+
+    print("Unscaled:")
+    print "Mean prediction: ", np.mean(Y_train_pred)
+    print "Std. prediction: ", np.std(Y_train_pred)
+    print "Max prediction: ", np.max(Y_train_pred)
+    print "Min prediction: ", np.min(Y_train_pred)
+
+    mae = mean_absolute_error(Y_train, Y_train_pred)
+    mse = mean_squared_error(Y_train, Y_train_pred)
+    print("mean absolute error", mae)
+    print("mean squared error", mse)
+
+    # Save Model
+    obj = (all_featurizers, label_type, clf, scale)
+
+    save_dir = opt["--save-dir"]
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+
+    if sentence_only:
+        feature_type += "_s_only"
+    elif question_only:
+        feature_type += "_q_only"
+
+    model_name = "{}_{}_{}_{}_{}_{}".format(
+        model_type, feature_type, label_type, scale, custom_feat, factoid_also)
+
+    save_path = os.path.join(save_dir, model_name + ".pickle")
+    print("saving model to {}".format(save_path))
+    with open(save_path, "wb") as fout:
+        pickle.dump(obj, fout)
 
 
 def test(opt):
@@ -428,7 +418,7 @@ def test(opt):
     """
     data_dir = opt["--data-dir"]
     factoid_also = bool(opt["--factoid-also"])
-    custom_feat = bool(opt["--custom-featurizer"])
+    # custom_feat = bool(opt["--custom-featurizer"])
 
     if factoid_also:
         valid_path = os.path.join(data_dir, "summary_factoid.valid.json")
