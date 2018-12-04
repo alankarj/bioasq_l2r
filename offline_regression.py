@@ -1,4 +1,4 @@
-""" Offline Supervised Regressin Model Train and Testing
+""" Offline Supervised Regression Model Train and Testing
 Usage:
     offline_regression.py train [options]
     offline_regression.py baseline [options]
@@ -8,7 +8,9 @@ Usage:
 Options:
     --data-dir=<file>       Directory to data [default: ./data/summary]
     --sentence-only         Sentence only features
-    --question-only         Question only features 
+    --question-only         Question only features
+    --factoid-also          Add factoid questions to the training and test data
+    --custom-featurizer     Add a custom featurizer
     -f --feature=<str>      Feature type to use [default: TF-IDF]
     -l --label=<str>        Label type to use [default: JACCARD]
     -s --scale=<int>        Scale scores and cut off to integer [default: 100]
@@ -40,6 +42,7 @@ from sklearn.utils.class_weight import compute_sample_weight
 
 from deiis.model import DataSet, Serializer
 from rouge import Rouge as RougeLib
+from Featurizer.custom_featurizer import CustomFeaturizer
 
 
 def scale_scores(Y, scale=100):
@@ -116,34 +119,28 @@ def get_all_sentences(summary_type_questions):
     num_sentences = 0
     for question in summary_type_questions:
         question.sentences = get_sentences(question)
-
-        # print "##############################################################"
-        # print question.ideal_answer
-
-        # for sentence in question.sentences:
-        #     print similarity.calculateSimilarity(sentence, question.ideal_answer[0])
-
         num_sentences += len(question.sentences)
-
     print 'Total number of sentences: ', num_sentences
     return summary_type_questions
 
 
-def read_summary_questions(filepath):
+def read_summary_questions(filepath, factoid_also=False):
     with open(filepath, 'r') as fin:
         dataset = Serializer.parse(fin, DataSet)
 
     summary_questions = []
     for question in dataset.questions:
-        print question.type
-        if question.type == "summary" or question.type == "factoid":
+        if question.type == "summary":
+            summary_questions.append(question)
+
+        if factoid_also and question.type == "factoid":
             summary_questions.append(question)
 
     summary_questions = get_all_sentences(summary_questions)
     return summary_questions
 
 
-def create_featurizers(feature_type):
+def create_featurizers(feature_type, custom_feat=False):
     """Create featurizers and return as list 
         1. sentence featurizer
         2. question featurizer
@@ -161,7 +158,13 @@ def create_featurizers(feature_type):
 
     # PCA
     pca = PCA(n_components=300)
-    all_featurizers = [sent_featurizer, question_featurizer, pca]
+
+    if not custom_feat:
+        custom_featurizer = None
+    else:
+        custom_featurizer = CustomFeaturizer()
+
+    all_featurizers = [sent_featurizer, question_featurizer, custom_featurizer, pca]
     return all_featurizers
 
 
@@ -259,14 +262,17 @@ def featurize(summary_questions, all_featurizers, sentence_only=False, question_
             sentence_list.append(sentence)
 
     # Process word tokens into feature array
-    sent_featurizer, question_featurizer, pca = all_featurizers
+    sent_featurizer, question_featurizer, custom_featurizer, pca = all_featurizers
 
     if train:
         sent_featurizer.fit(sentence_list)
         question_featurizer.fit(question_list)
+        if custom_featurizer is not None:
+            custom_featurizer.fit(question_list, sentence_list)
 
-    sentence_features = all_featurizers[0].transform(sentence_list)
-    question_features = all_featurizers[1].transform(question_list)
+    sentence_features = sent_featurizer.transform(sentence_list)
+    question_features = question_featurizer.transform(question_list)
+    custom_features = custom_featurizer.transform(question_list, sentence_list)
 
     if sentence_only:
         X = sentence_features.toarray()
@@ -280,6 +286,8 @@ def featurize(summary_questions, all_featurizers, sentence_only=False, question_
         pca.fit(X)
 
     X = pca.transform(X)
+    if custom_featurizer is not None:
+        X = hstack([X, custom_features]).toarray()
     return X
 
 
@@ -309,7 +317,13 @@ def train(opt):
 
     # Process data
     data_dir = opt["--data-dir"]
-    train_path = os.path.join(data_dir, "summary_factoid.train.json")
+    factoid_also = bool(opt["--factoid-also"])
+    custom_feat = bool(opt["--custom-featurizer"])
+
+    if factoid_also:
+        train_path = os.path.join(data_dir, "summary_factoid.train.json")
+    else:
+        train_path = os.path.join(data_dir, "summary.train.json")
 
     feature_type = opt["--feature"]
     label_type = opt["--label"]
@@ -317,8 +331,8 @@ def train(opt):
     question_only = bool(opt["--question-only"])
     sentence_only = bool(opt["--sentence-only"])
 
-    train_questions = read_summary_questions(train_path)
-    all_featurizers = create_featurizers(feature_type)
+    train_questions = read_summary_questions(train_path, factoid_also)
+    all_featurizers = create_featurizers(feature_type, custom_feat=custom_feat)
 
     print("Featurizing")
     X_train = featurize(train_questions, all_featurizers,
@@ -344,18 +358,18 @@ def train(opt):
 
     # Train
     print("Start training")
-    # Create sample weights
-    interval = float(opt['--interval'])
-    Y_train_bin, cat2score = score_to_bin(Y_train, interval)
-    sample_weight = compute_sample_weight("balanced", Y_train_bin)
+    # # Create sample weights
+    # interval = float(opt['--interval'])
+    # Y_train_bin, cat2score = score_to_bin(Y_train, interval)
+    # sample_weight = compute_sample_weight("balanced", Y_train_bin)
+    # clf.fit(X_train, Y_train_scale, sample_weight=sample_weight)
 
-    clf.fit(X_train, Y_train_scale, sample_weight=sample_weight)
+    clf.fit(X_train, Y_train_scale)
 
     Y_train_pred_scale = clf.predict(X_train)
     Y_train_pred = scale_scores(Y_train_pred_scale, scale=1./scale)
 
     print("Scaled:")
-
     mae = mean_absolute_error(Y_train_scale, Y_train_pred_scale)
     mse = mean_squared_error(Y_train_scale, Y_train_pred_scale)
     print("mean absolute error", mae)
@@ -379,8 +393,8 @@ def train(opt):
     elif question_only:
         feature_type += "_q_only"
 
-    model_name = "{}_{}_{}_{}".format(
-        model_type, feature_type, label_type, scale)
+    model_name = "{}_{}_{}_{}_{}".format(
+        model_type, feature_type, label_type, scale, custom_feat)
 
     save_path = os.path.join(save_dir, model_name + ".pickle")
     print("saving model to {}".format(save_path))
@@ -392,8 +406,15 @@ def test(opt):
     """ Example Usage of Testing
     """
     data_dir = opt["--data-dir"]
-    valid_path = os.path.join(data_dir, "summary_factoid.valid.json")
-    valid_questions = read_summary_questions(valid_path)
+    factoid_also = bool(opt["--factoid-also"])
+    custom_feat = bool(opt["--custom-featurizer"])
+
+    if factoid_also:
+        valid_path = os.path.join(data_dir, "summary_factoid.valid.json")
+    else:
+        valid_path = os.path.join(data_dir, "summary.valid.json")
+
+    valid_questions = read_summary_questions(valid_path, factoid_also)
 
     model_path = opt["--model-path"]
     with open(model_path, 'rb') as fin:
@@ -411,12 +432,9 @@ def test(opt):
     Y_valid_scale = scale_scores(Y_valid, scale)
 
     Y_valid_pred_scale = clf.predict(X_valid)
-
-    Y_valid_pred_scale = clf.predict(X_valid)
     Y_valid_pred = scale_scores(Y_valid_pred_scale, scale=1./scale)
 
     print("Scaled:")
-
     mae = mean_absolute_error(Y_valid_scale, Y_valid_pred_scale)
     mse = mean_squared_error(Y_valid_scale, Y_valid_pred_scale)
     print("mean absolute error", mae)
