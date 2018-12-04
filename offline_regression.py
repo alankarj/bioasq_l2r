@@ -28,6 +28,7 @@ import random
 import numpy as np
 from docopt import docopt
 from nltk.corpus import stopwords
+from nltk.stem import PorterStemmer
 from nltk.tokenize import sent_tokenize, word_tokenize
 from scipy.sparse import hstack
 from sklearn.decomposition import PCA
@@ -166,9 +167,10 @@ def create_featurizers(feature_type):
 
 
 class SimilarityJaccard(object):
-    def __init__(self, stopWords):
+    def __init__(self, stopWords, stemmer):
         self.stopWords = stopWords
         self.r = RougeLib()
+        self.stemmer = stemmer
 
     def calculateSimilarity(self, s1, s2):
         # s2 is assumed to be a set of tokens
@@ -186,13 +188,19 @@ class SimilarityJaccard(object):
         # print "Sentence-2", sent2
         return self.r.get_scores(sent1, sent2)[0]['rouge-2']['r']
 
+    def caculateSimilarityWithStem(self, s1, s2):
+        set1 = set([self.stemmer.stem(i.lower()) for i in word_tokenize(s1) if i.lower() not in self.stopWords])
+        set2 = set([self.stemmer.stem(i.lower()) for i in s2])
+        return float(len(set1.intersection(set2))) / len(set1.union(set2))
+
 
 def get_labels(summary_type_questions, label_type):
     print "Getting labels..."
     all_scores = list()
 
     stopWords = set(stopwords.words('english'))
-    similarity = SimilarityJaccard(stopWords)
+    stemmer = PorterStemmer()
+    similarity = SimilarityJaccard(stopWords, stemmer)
 
     count = 0
 
@@ -224,6 +232,8 @@ def get_labels(summary_type_questions, label_type):
                     scores.append(similarity.calculateSimilarity(sentence, s2))
                 elif label_type == "ROUGE":
                     scores.append(similarity.calculateRouge(sentence, s2))
+                elif label_type == "JACCARD_STEM":
+                    scores.append(similarity.caculateSimilarityWithStem(sentence, s2))
                 else:
                     raise ValueError(
                         "Unknown label type: {}".format(label_type))
