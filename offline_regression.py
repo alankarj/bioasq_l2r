@@ -43,6 +43,9 @@ from sklearn.utils.class_weight import compute_sample_weight
 from deiis.model import DataSet, Serializer
 from rouge import Rouge as RougeLib
 from Featurizer.custom_featurizer import CustomFeaturizer
+import seaborn as sns
+import matplotlib.pyplot as plt
+sns.set(color_codes=True)
 
 
 def scale_scores(Y, scale=100):
@@ -200,8 +203,9 @@ def get_labels(summary_type_questions, label_type):
     count = 0
 
     for i, question in enumerate(summary_type_questions):
-        print "Question-", i
-        print "ID: ", question.id
+        count += 1
+        # print "Question-", i
+        # print "ID: ", question.id
 
         list_of_sets = []
 
@@ -220,7 +224,7 @@ def get_labels(summary_type_questions, label_type):
                 ]))
 
         for sentence in question.sentences:
-            print sentence
+            # print sentence
             scores = []
             for s2 in list_of_sets:
                 if label_type == "JACCARD":
@@ -232,10 +236,6 @@ def get_labels(summary_type_questions, label_type):
                         "Unknown label type: {}".format(label_type))
 
             one_score = sum(scores) / len(scores)
-            # if one_score > 0.1:
-            #     count += 1
-            #     print sentence
-            #     print list_of_sets
             all_scores.append(one_score)
 
     all_scores = np.array(all_scores)
@@ -244,7 +244,7 @@ def get_labels(summary_type_questions, label_type):
     print "Std. Dev.: ", np.std(all_scores)
     print "Min.: ", np.min(all_scores)
     print "Max.: ", np.max(all_scores)
-    print "Count: ", count
+    print "Number of questions: ", count
     return all_scores
 
 
@@ -313,6 +313,14 @@ def score_to_bin(Y, interval=0.1):
     return Y_cat, cat2score
 
 
+def plot_dist(y, file_name):
+    sns.distplot(y, norm_hist=True)
+    plt.xlabel("Label values")
+    plt.ylabel("Histogram/Density")
+    plt.savefig(file_name, bbox_inches="tight")
+    plt.show()
+
+
 def train(opt):
 
     # Process data
@@ -335,71 +343,74 @@ def train(opt):
     all_featurizers = create_featurizers(feature_type, custom_feat=custom_feat)
 
     print("Featurizing")
-    X_train = featurize(train_questions, all_featurizers,
-                        sentence_only, question_only, train=True)
+    # X_train = featurize(train_questions, all_featurizers,
+    #                     sentence_only, question_only, train=True)
 
     Y_train = get_labels(train_questions, label_type)
-    print("X_train", X_train.shape, "Y_train", Y_train.shape)
+    plot_dist(Y_train, file_name=label_type + "_" + str(factoid_also) + ".pdf")
+    print "Number of sentences: ", Y_train.shape[0]
 
-    scale = int(opt['--scale'])
-
-    Y_train_scale = scale_scores(Y_train, scale)
-    # Load model
-    model_type = opt["--model"]
-    print("Model:", model_type)
-    if model_type == "LinearRegression":
-        clf = LinearRegression()
-    elif model_type == "LinearSVR":
-        clf = LinearSVR(verbose=2)
-    elif model_type == "SVR":
-        clf = SVR(verbose=2)
-    else:
-        raise ValueError("Unknown model: {}".format(model_type))
-
-    # Train
-    print("Start training")
-    # # Create sample weights
-    # interval = float(opt['--interval'])
-    # Y_train_bin, cat2score = score_to_bin(Y_train, interval)
-    # sample_weight = compute_sample_weight("balanced", Y_train_bin)
-    # clf.fit(X_train, Y_train_scale, sample_weight=sample_weight)
-
-    clf.fit(X_train, Y_train_scale)
-
-    Y_train_pred_scale = clf.predict(X_train)
-    Y_train_pred = scale_scores(Y_train_pred_scale, scale=1./scale)
-
-    print("Scaled:")
-    mae = mean_absolute_error(Y_train_scale, Y_train_pred_scale)
-    mse = mean_squared_error(Y_train_scale, Y_train_pred_scale)
-    print("mean absolute error", mae)
-    print("mean squared error", mse)
-
-    print("Unscaled:")
-    mae = mean_absolute_error(Y_train, Y_train_pred)
-    mse = mean_squared_error(Y_train, Y_train_pred)
-    print("mean absolute error", mae)
-    print("mean squared error", mse)
-
-    # Save Model
-    obj = (all_featurizers, label_type, clf, scale)
-
-    save_dir = opt["--save-dir"]
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
-
-    if sentence_only:
-        feature_type += "_s_only"
-    elif question_only:
-        feature_type += "_q_only"
-
-    model_name = "{}_{}_{}_{}_{}".format(
-        model_type, feature_type, label_type, scale, custom_feat)
-
-    save_path = os.path.join(save_dir, model_name + ".pickle")
-    print("saving model to {}".format(save_path))
-    with open(save_path, "wb") as fout:
-        pickle.dump(obj, fout)
+    # print("X_train", X_train.shape, "Y_train", Y_train.shape)
+    #
+    # scale = int(opt['--scale'])
+    #
+    # Y_train_scale = scale_scores(Y_train, scale)
+    # # Load model
+    # model_type = opt["--model"]
+    # print("Model:", model_type)
+    # if model_type == "LinearRegression":
+    #     clf = LinearRegression()
+    # elif model_type == "LinearSVR":
+    #     clf = LinearSVR(verbose=2)
+    # elif model_type == "SVR":
+    #     clf = SVR(verbose=2)
+    # else:
+    #     raise ValueError("Unknown model: {}".format(model_type))
+    #
+    # # Train
+    # print("Start training")
+    # # # Create sample weights
+    # # interval = float(opt['--interval'])
+    # # Y_train_bin, cat2score = score_to_bin(Y_train, interval)
+    # # sample_weight = compute_sample_weight("balanced", Y_train_bin)
+    # # clf.fit(X_train, Y_train_scale, sample_weight=sample_weight)
+    #
+    # clf.fit(X_train, Y_train_scale)
+    #
+    # Y_train_pred_scale = clf.predict(X_train)
+    # Y_train_pred = scale_scores(Y_train_pred_scale, scale=1./scale)
+    #
+    # print("Scaled:")
+    # mae = mean_absolute_error(Y_train_scale, Y_train_pred_scale)
+    # mse = mean_squared_error(Y_train_scale, Y_train_pred_scale)
+    # print("mean absolute error", mae)
+    # print("mean squared error", mse)
+    #
+    # print("Unscaled:")
+    # mae = mean_absolute_error(Y_train, Y_train_pred)
+    # mse = mean_squared_error(Y_train, Y_train_pred)
+    # print("mean absolute error", mae)
+    # print("mean squared error", mse)
+    #
+    # # Save Model
+    # obj = (all_featurizers, label_type, clf, scale)
+    #
+    # save_dir = opt["--save-dir"]
+    # if not os.path.exists(save_dir):
+    #     os.makedirs(save_dir)
+    #
+    # if sentence_only:
+    #     feature_type += "_s_only"
+    # elif question_only:
+    #     feature_type += "_q_only"
+    #
+    # model_name = "{}_{}_{}_{}_{}".format(
+    #     model_type, feature_type, label_type, scale, custom_feat)
+    #
+    # save_path = os.path.join(save_dir, model_name + ".pickle")
+    # print("saving model to {}".format(save_path))
+    # with open(save_path, "wb") as fout:
+    #     pickle.dump(obj, fout)
 
 
 def test(opt):
