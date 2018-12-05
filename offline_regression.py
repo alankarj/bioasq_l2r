@@ -393,7 +393,11 @@ def train(opt):
     print("mean squared error", mse)
 
     # Save Model
-    obj = (all_featurizers, label_type, clf, scale)
+    if custom_feat is not None:
+        new_featurizer = (all_featurizers[0], all_featurizers[1], all_featurizers[3])
+    else:
+        new_featurizer = all_featurizers
+    obj = (new_featurizer, label_type, clf, scale)
 
     save_dir = opt["--save-dir"]
     if not os.path.exists(save_dir):
@@ -418,7 +422,7 @@ def test(opt):
     """
     data_dir = opt["--data-dir"]
     factoid_also = bool(opt["--factoid-also"])
-    # custom_feat = bool(opt["--custom-featurizer"])
+    custom_feat = bool(opt["--custom-featurizer"])
 
     if factoid_also:
         valid_path = os.path.join(data_dir, "summary_factoid.valid.json")
@@ -430,6 +434,11 @@ def test(opt):
     model_path = opt["--model-path"]
     with open(model_path, 'rb') as fin:
         (all_featurizers, label_type, clf, scale) = pickle.load(fin)
+
+    if custom_feat:
+        all_featurizers = (all_featurizers[0], all_featurizers[1], CustomFeaturizer(), all_featurizers[2])
+    else:
+        all_featurizers = (all_featurizers[0], all_featurizers[1], None, all_featurizers[2])
 
     question_only = bool(opt["--question-only"])
     sentence_only = bool(opt["--sentence-only"])
